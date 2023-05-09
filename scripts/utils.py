@@ -1,17 +1,6 @@
-import re
-
 import numpy as np
 
-
-def get_s2ef_ids(input):
-    pass
-    # pattern = r"\[(\d+)\]"
-    # output = []
-    # for string in input:
-    #     matches = re.findall(pattern, string)
-    #     int_values = [int(match) for match in matches]
-    #     output.append("_".join([str(_) for _ in int_values]))
-    # return output
+### S2EF Version
 
 
 def npz_convert(npz_id, npz_ood_cat, npz_ood_ads, npz_ood_both):
@@ -24,11 +13,8 @@ def npz_convert(npz_id, npz_ood_cat, npz_ood_ads, npz_ood_both):
     }
     full_dict = {}
     for idx, (dataset_name, dataset) in enumerate(datasets.items()):
-        print(idx)
-        # import pdb;pdb.set_trace()
         ids = []
         for idx, id in enumerate(dataset["ids"]):
-            #print(idx, end="\r")
             try:
                 ids.append(
                     str(int(float(id.split("_")[0])))
@@ -38,8 +24,6 @@ def npz_convert(npz_id, npz_ood_cat, npz_ood_ads, npz_ood_both):
             except Exception:
 
                 print(id)
-        # ids = [item for item in [*dataset["ids"]]]
-        # full_dict[f"{dataset_name}_ids"] = get_s2ef_ids(ids)
         full_dict[f"{dataset_name}_ids"] = ids
         full_dict[f"{dataset_name}_energy"] = [
             item.astype(float).item() for item in [*dataset["energy"]]
@@ -103,6 +87,9 @@ if __name__ == "__main__":
         make_submission_file(args)
     else:
         parse_npz_for_nans(args.npz_file)
+
+
+### IS2RE Version
 
 
 # import numpy as np
