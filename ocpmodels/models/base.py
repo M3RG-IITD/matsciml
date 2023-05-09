@@ -192,7 +192,7 @@ class OCPLitModule(pl.LightningModule):
         if self._nan_check:
             # configure logging for the bad batch detection
             self._nan_logger = logging.getLogger("pytorch_lightning")
-            self._nan_logger.setLevel(logging.DEBUG)
+            # self._nan_logger.setLevel(logging.DEBUG)
             self._nan_logger.addHandler(logging.FileHandler("nan_checker.log"))
 
     def forward(self, *args, **kwargs):
@@ -435,8 +435,29 @@ class OCPLitModule(pl.LightningModule):
             Tuple of input data to the model, which is
             subsequently unpacked into `forward`.
         """
-        graph = batch.get("graph")
-        return (graph,)
+        batch = {key: value.clone() for key, value in batch.items()}
+        if self.model.__class__.__name__ == "MEGNet":
+            graph = batch.get("graph")
+            graph_attr = batch.get("graph_variables")
+            edge_feat = torch.hstack((graph.edata["r"], graph.edata["mu"].view(-1, 1)))
+
+            is_surface = (graph.ndata["tags"] > 1).to(torch.int8)
+
+            if hasattr(self, "regress_forces"):
+                if self.regress_forces:
+                    graph.ndata["pos"].requires_grad_(True)
+            node_feat = torch.hstack(
+                [
+                    graph.ndata["pos"],  # dim=3
+                    graph.ndata["atomic_numbers"].view(-1, 1),  # dim=1
+                    is_surface.view(-1, 1),  # dim=1
+                ]
+            )
+
+            return graph, edge_feat, node_feat, graph_attr
+        else:
+            graph = batch.get("graph")
+            return (graph,)
 
     def _get_batch_size(
         self, batch: Dict[str, Union[torch.Tensor, dgl.DGLGraph]]

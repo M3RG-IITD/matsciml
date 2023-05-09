@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT License
+# Copyright (C) 2022 Intel Corporation
+
+predict:
+  backbone: PLEGNNBackbone
+  task: IS2RELitModule
+  backbone_config: /store/code/open-catalyst/matsciml-logs/leaderboard-configs-2022/egnn-is2re-all/egnn.yml
+  ckpt_path: /store/code/open-catalyst/matsciml-logs/leaderboard-configs-2022/egnn-is2re-all/checkpoints/epoch=99-step=239800.ckpt
+  task_data_module: IS2REDGLDataModule
+  data_config: /store/code/open-catalyst/matsciml-logs/leaderboard-configs-2022/egnn-is2re-all/is2re.yml
+  # val_paths: [/store/code/open-catalyst/matsciml-public/ocpmodels/datasets/dev-is2re-dgl]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/val_ood_both/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/val_ood_ads/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/val_ood_cat/]
+  val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/val_id/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/test_ood_both/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/test_ood_ads/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/test_ood_cat/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/test_id/]
+  num_devices: 1
+  accelerator: "gpu"
+  pipeline: predict
+  # pipeline: validate
+  logger:
+      init_args:
+        save_dir: "./submission_logs/egnn-is2re"
+        name: "logs"

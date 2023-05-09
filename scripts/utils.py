@@ -4,13 +4,14 @@ import numpy as np
 
 
 def get_s2ef_ids(input):
-    pattern = r"\[(\d+)\]"
-    output = []
-    for string in input:
-        matches = re.findall(pattern, string)
-        int_values = [int(match) for match in matches]
-        output.append("_".join([str(_) for _ in int_values]))
-    return output
+    pass
+    # pattern = r"\[(\d+)\]"
+    # output = []
+    # for string in input:
+    #     matches = re.findall(pattern, string)
+    #     int_values = [int(match) for match in matches]
+    #     output.append("_".join([str(_) for _ in int_values]))
+    # return output
 
 
 def npz_convert(npz_id, npz_ood_cat, npz_ood_ads, npz_ood_both):
@@ -22,9 +23,24 @@ def npz_convert(npz_id, npz_ood_cat, npz_ood_ads, npz_ood_both):
         "ood_both": npz_ood_both,
     }
     full_dict = {}
-    for dataset_name, dataset in datasets.items():
-        ids = [item for item in [*dataset["ids"]]]
-        full_dict[f"{dataset_name}_ids"] = get_s2ef_ids(ids)
+    for idx, (dataset_name, dataset) in enumerate(datasets.items()):
+        print(idx)
+        # import pdb;pdb.set_trace()
+        ids = []
+        for idx, id in enumerate(dataset["ids"]):
+            #print(idx, end="\r")
+            try:
+                ids.append(
+                    str(int(float(id.split("_")[0])))
+                    + "_"
+                    + str(int(float(id.split("_")[1])))
+                )
+            except Exception:
+
+                print(id)
+        # ids = [item for item in [*dataset["ids"]]]
+        # full_dict[f"{dataset_name}_ids"] = get_s2ef_ids(ids)
+        full_dict[f"{dataset_name}_ids"] = ids
         full_dict[f"{dataset_name}_energy"] = [
             item.astype(float).item() for item in [*dataset["energy"]]
         ]
@@ -41,10 +57,11 @@ def npz_convert(npz_id, npz_ood_cat, npz_ood_ads, npz_ood_both):
 
 
 def parse_npz_for_nans(file):
+    print(file)
     data = np.load(file)
-    if np.isnan(data['energy']).any():
+    if np.isnan(data["energy"]).any():
         print("Found nans in energy!")
-    elif np.isnan(data['forces']).any():
+    elif np.isnan(data["forces"]).any():
         print("Found nans in forces!")
     else:
         print("No nans found")
@@ -88,3 +105,70 @@ if __name__ == "__main__":
         parse_npz_for_nans(args.npz_file)
 
 
+# import numpy as np
+
+# def npz_convert(npz_id, npz_ood_cat, npz_ood_ads, npz_ood_both):
+#     full_dict = dict()
+
+#     full_dict['id_ids'] = [str(int(item.item())) for item in [*npz_id['id']]]
+#     full_dict['id_energy'] = [item.astype(float).item() for item in [*npz_id['energy']]]
+
+#     full_dict['ood_cat_ids'] = [str(int(item.item())) for item in [*npz_ood_cat['id']]]
+#     full_dict['ood_cat_energy'] = [item.astype(float).item() for item in [*npz_ood_cat['energy']]]
+
+#     full_dict['ood_ads_ids'] = [str(int(item.item())) for item in [*npz_ood_ads['id']]]
+#     full_dict['ood_ads_energy'] = [item.astype(float).item() for item in [*npz_ood_ads['energy']]]
+
+#     full_dict['ood_both_ids'] = [str(int(item.item())) for item in [*npz_ood_both['id']]]
+#     full_dict['ood_both_energy'] = [item.astype(float).item() for item in [*npz_ood_both['energy']]]
+
+#     return full_dict
+
+
+# def parse_npz(file):
+#     import numpy as np
+#     import pandas as pd
+
+#     data = np.load(file)
+#     df= pd.DataFrame.from_dict({item: data[item][:,0] for item in data.files})
+#     if df.isnull().values.any():
+#         print("NANS EXIST!")
+#     else:
+#         print("No Nans")
+
+
+# def make_submission_file(args):
+#     npz_id = np.load(args.id)
+#     npz_ood_cat = np.load(args.ood_cat)
+#     npz_ood_ads = np.load(args.ood_ads)
+#     npz_ood_both = np.load(args.ood_both)
+#     out_dict = npz_convert(npz_id, npz_ood_cat, npz_ood_ads, npz_ood_both)
+#     np.savez_compressed(args.out_path, **out_dict)
+#     print(f"Saved submission file: {args.out_path}")
+
+
+# if __name__ == "__main__":
+#     from argparse import ArgumentParser
+#     argparser = ArgumentParser()
+#     argparser.add_argument('--npz-file', type=str, default='',
+#                         help='npz log file to parse')
+#     argparser.add_argument('--submission', action="store_true")
+#     argparser.add_argument(
+#         "--id", help="Path to ID results. Required for OC20 and OC22."
+#     )
+#     argparser.add_argument(
+#         "--ood-ads", help="Path to OOD-Ads results. Required only for OC20."
+#     )
+#     argparser.add_argument(
+#         "--ood-cat", help="Path to OOD-Cat results. Required only for OC20."
+#     )
+#     argparser.add_argument(
+#         "--ood-both", help="Path to OOD-Both results. Required only for OC20."
+#     )
+#     argparser.add_argument(
+#         "--out-path", default="submission_file.npz")
+#     args = argparser.parse_args()
+#     if args.submission:
+#         make_submission_file(args)
+#     else:
+#         parse_npz(args.npz_file)

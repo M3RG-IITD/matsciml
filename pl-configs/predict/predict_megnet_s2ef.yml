@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT License
+# Copyright (C) 2022 Intel Corporation
+
+predict:
+  backbone: MEGNet
+  task: S2EFLitModule
+  backbone_config: /store/code/open-catalyst/matsciml-logs/leaderboard-configs-2022/megnet-s2ef-2m/megnet.yml
+  ckpt_path: /store/code/open-catalyst/matsciml-logs/leaderboard-configs-2022/megnet-s2ef-2m/checkpoints/epoch=85-step=537500.ckpt
+  task_data_module: S2EFDGLDataModule
+  data_config: /store/code/open-catalyst/matsciml-logs/leaderboard-configs-2022/megnet-s2ef-2m/s2ef.yml
+  # val_paths: [/store/code/open-catalyst/matsciml-public/ocpmodels/datasets/dev-s2ef-dgl]
+  # val_paths: [/store/nosnap/data/s2ef_dgl_test/test_id/]
+  # val_paths: [/store/nosnap/data/s2ef_dgl_test/test_ood_ads/]
+  # val_paths: [/store/nosnap/data/s2ef_dgl_test/test_ood_both/]
+  # val_paths: [/store/nosnap/data/s2ef_dgl_test/test_ood_cat/]
+
+  # val_paths: [/datasets-alt/open-catalyst/s2ef_val_ood_ads/ref_energy_munch_s2ef_val_ood_ads/]
+  # val_paths: [/datasets-alt/open-catalyst/s2ef_val_ood_both/ref_energy_munch_s2ef_val_ood_both/]
+  # val_paths: [/datasets-alt/open-catalyst/s2ef_val_ood_cat/ref_energy_munch_s2ef_val_ood_cat/]
+  val_paths: [/datasets-alt/open-catalyst/s2ef_val_id/ref_energy_munch_s2ef_val_id/]
+
+
+  num_devices: 1
+  accelerator: "gpu"
+  pipeline: predict
+  logger:
+      init_args:
+        save_dir: "./submission_logs/megnet-s2ef"
+        name: "logs"

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT License
+# Copyright (C) 2022 Intel Corporation
+
+predict:
+  backbone: GalaPotential
+  task: IS2REPointCloudModule
+  backbone_config: /store/code/open-catalyst/.others/projects.research.chem-ai.open-catalyst-collab/aold_branches/leaderboard-megnet-integration/gala-multi-node-experiments/gala-is2re-all-4-node/configs/gaanet.yml
+  ckpt_path: /store/code/open-catalyst/matsciml-logs/leaderboard-configs-2022/gala-is2re-all/epoch=27-step=6300_backup.ckpt
+  task_data_module: PointCloudDataModule
+  data_config: /store/code/open-catalyst/.others/projects.research.chem-ai.open-catalyst-collab/aold_branches/leaderboard-megnet-integration/gala-multi-node-experiments/gala-is2re-all-4-node/configs/point-cloud.yml
+  # val_paths: [/store/code/open-catalyst/matsciml-public/ocpmodels/datasets/dev-is2re-dgl]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/val_ood_both/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/val_ood_ads/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/val_ood_cat/]
+  val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/val_id/]
+
+
+
+
+
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/test_ood_both/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/test_ood_ads/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/test_ood_cat/]
+  # val_paths: [/datasets-alt/open-catalyst/dgl_is2re/is2re/all/test_id/]
+  num_devices: 1
+  accelerator: "gpu"
+  pipeline: predict
+  logger:
+      init_args:
+        save_dir: "./submission_logs/gala-is2re"
+        name: "logs"
