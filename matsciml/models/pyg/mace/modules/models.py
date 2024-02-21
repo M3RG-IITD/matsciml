@@ -452,12 +452,12 @@ class ScaleShiftMACE(MACE):
         data["weights"] = torch.ones((data["positions"].shape[0],))
 
         atomic_numbers: torch.Tensor = getattr(graph, "atomic_numbers")
-        z_table = tools.get_atomic_number_table_from_zs(atomic_numbers.cpu().numpy())
+        z_table = torch.arange(1,119)          #tools.get_atomic_number_table_from_zs(atomic_numbers.cpu().numpy())
 
-        indices = atomic_numbers_to_indices(atomic_numbers, z_table=z_table)
+        indices = atomic_numbers-1       ##atomic_numbers_to_indices(atomic_numbers, z_table=z_table)
         data["node_attrs"] = to_one_hot(
             torch.tensor(indices, dtype=torch.long).unsqueeze(-1),
-            num_classes=100,
+            num_classes=len(z_table),
         )
 
         shifts = []
