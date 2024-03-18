@@ -1275,6 +1275,9 @@ class MaceEnergyForceTask(BaseTaskModule):
         """
         targets = self._get_targets(batch)
         predictions = self(batch)
+        predictions['energy']=predictions['energy']/batch['natoms']
+        targets['energy']=targets['energy']/batch['natoms']
+        
         losses = {}
         for key in self.task_keys:
             target_val = targets[key]
@@ -1288,7 +1291,33 @@ class MaceEnergyForceTask(BaseTaskModule):
             losses[key] = self.loss_func(predictions[key], target_val)*(coefficient/predictions[key].numel())
         
         total_loss: torch.Tensor = sum(losses.values())
+        
+
+
         return {"loss": total_loss, "log": losses}
+    
+    def configure_optimizers(self) -> torch.optim.SGD:
+        opt = torch.optim.SGD(
+            self.parameters(),
+            lr=self.hparams.lr,
+            
+            #weight_decay=self.hparams.weight_decay,
+        )
+        # configure schedulers as a nested dictionary
+        schedule_dict = getattr(self.hparams, "scheduler_kwargs", None)
+        schedulers = []
+        if schedule_dict:
+            for scheduler_name, params in schedule_dict.items():
+                # try get the scheduler class
+                scheduler_class = getattr(lr_scheduler, scheduler_name, None)
+                if not scheduler_class:
+                    raise NameError(
+                        f"{scheduler_class} was requested for LR scheduling, but is not in 'torch.optim.lr_scheduler'.",
+                    )
+                scheduler = scheduler_class(opt, **params)
+                schedulers.append(scheduler)
+        print("Learning_rate", self.hparams.lr)
+        return [opt], schedulers
 
     
     def _make_output_heads(self) -> nn.ModuleDict:
