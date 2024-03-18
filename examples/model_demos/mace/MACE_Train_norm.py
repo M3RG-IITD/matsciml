@@ -7,14 +7,15 @@ import sys
 # sys.path.append("/workspace/ai-mat-top/matsciml_top/forks/carmelo_matsciml/")
 
 import e3nn
-
+# import math
 # Atomic Energies table
 import mendeleev
 import pytest
 import pytorch_lightning as pl
 from mendeleev.fetch import fetch_ionization_energies
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, GradientAccumulationScheduler
 from pytorch_lightning.loggers import WandbLogger
+# from torch.optim.lr_scheduler import LambdaLR
 import wandb
 from tqdm import tqdm
 
@@ -39,7 +40,7 @@ from matsciml.models.pyg.mace.tools import atomic_numbers_to_indices, to_one_hot
 
 pl.seed_everything(6)
 
-
+torch.manual_seed(111)
 # %%
 
 
@@ -78,9 +79,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-def compute_average_E0s(
-    collections_train, z_table
-):
+
+
+DATASET = "gnome_mptraj"
+# TRAIN_PATH = "/store/code/open-catalyst/data_lmdbs/mp-traj-gnome-combo/train"
+# VAL_PATH = "/store/code/open-catalyst/data_lmdbs/mp-traj-gnome-combo/val"
+TRAIN_PATH =  "/home/m3rg2000/matsciml/matsciml/datasets/devset" #"/home/m3rg2000/matsciml/matsciml/datasets/devset" #"matsciml/datasets/lips/devset"#"/datasets-alt/molecular-data/mat_traj/mp-traj-gnome-combo/train"
+VAL_PATH = "/home/m3rg2000/matsciml/matsciml/datasets/trial/test" #"matsciml/datasets/lips/devset"#"/datasesets-alt/molecular-data/mat_traj/mp-traj-gnome-combo/val"
+
+def compute_average_E0s(collections_train, z_table,max_iter=50):
     """
     Function to compute the average interaction energy of each chemical element
     returns dictionary of E0s
@@ -92,81 +99,93 @@ def compute_average_E0s(
     """
     len_train = len(collections_train)
     len_zs = len(z_table)
-    A = np.zeros((len_train, len_zs))
-    B = np.zeros(len_train)
-    print(A.shape)
-    i=0
-    for batch in collections_train:
-        B[i] = batch['energy'].sum()
-        
+    # Convert arrays to PyTorch tensors
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Check for GPU availability
+    A = torch.zeros(max_iter, len_zs)
+    B = torch.zeros(max_iter)
+    
+    for i, batch in enumerate(collections_train):
+        if(i>max_iter-1):
+            break
+        B[i] = batch['energy'].sum()  
         for j, z in enumerate(z_table):
-            A[i, j] = np.count_nonzero(batch['graph']['atomic_numbers'][:] == z)
-        i+=1
-    E0s = np.linalg.lstsq(A, B, rcond=None)[0]
-    return E0s
+            A[i, j] = torch.count_nonzero(batch['graph']['atomic_numbers'][:] == z)  
+        
+    A = A.to(device)  
+    B = B.to(device)  
+
+    # Solve the linear system using PyTorch
+    E0s = torch.linalg.lstsq(A, B)[0]
+    
+    return E0s.cpu().numpy()  # Move result back to CPU and convert to NumPy array
 
  
+def process_batch(batch, atomic_energies_fn):
+    graph = batch.get("graph")
+    atomic_numbers = getattr(graph, "atomic_numbers")
+    z_table = torch.arange(1, 118 + 1)
+    indices = atomic_numbers - 1
+    node_attrs = to_one_hot(
+        torch.tensor(indices, dtype=torch.long).unsqueeze(-1),
+        num_classes=len(z_table)
+    )
+    node_e0 = atomic_energies_fn(node_attrs)
+    graph_e0s = scatter_sum(
+        src=node_e0, index=graph.batch, dim=-1, dim_size=graph.num_graphs
+    )
+    graph_sizes = graph.ptr[1:] - graph.ptr[:-1]
 
-### Combined Datasets
-# pre_compute_params = {
-#     "mean": 150,
-#     "std": 50,
-#     "avg_num_neighbors": 20,
-# }
+    atomic_inter_energy = (batch['energy'] - graph_e0s) / graph_sizes
+    mean = atomic_inter_energy.mean().item()
+    std = atomic_inter_energy.std().item()
 
-DATASET = "gnome_mptraj"
-# TRAIN_PATH = "/store/code/open-catalyst/data_lmdbs/mp-traj-gnome-combo/train"
-# VAL_PATH = "/store/code/open-catalyst/data_lmdbs/mp-traj-gnome-combo/val"
-TRAIN_PATH = "/home/m3rg2000/matsciml/matsciml/datasets/trial/devset" #"matsciml/datasets/lips/devset"#"/datasets-alt/molecular-data/mat_traj/mp-traj-gnome-combo/train"
-VAL_PATH = "/home/m3rg2000/matsciml/matsciml/datasets/trial/test" #"matsciml/datasets/lips/devset"#"/datasesets-alt/molecular-data/mat_traj/mp-traj-gnome-combo/val"
+    avg_num_neighbors = graph.edge_index.numel() / len(atomic_numbers)
+
+    return mean, std, avg_num_neighbors
+
+
 def compute_mean_std_atomic_inter_energy_and_avg_num_neighbors(
-    data_loader: torch.utils.data.DataLoader,atomic_energies,
+    data_loader: torch.utils.data.DataLoader, atomic_energies, convergence_threshold=0.1, max_iterations=50
 ):
-    #avg_atom_inter_es_list = []
-    avg_num_neighbors_list=[]
-    mean_sum=0
-    std_sum=0
-    counter=0
-    
     atomic_energies_fn = AtomicEnergiesBlock(atomic_energies=atomic_energies)
-
+    
+    mean_estimate = 0
+    std_estimate = 0
+    iterations = 0
+    means=[]
     for batch in data_loader:
-        counter+=1
-       
-        atomic_energies =atomic_energies
-        graph = batch.get("graph")
-        atomic_numbers: torch.Tensor = getattr(graph, "atomic_numbers")
-        z_table=torch.arange(1,len(atomic_energies)+1)#List of atomic numbers [1,...,118] #tools.get_atomic_number_table_from_zs(atomic_numbers.numpy())
-        indices = atomic_numbers-1 # Index of atomic number in z_table #atomic_numbers_to_indices(atomic_numbers, z_table=z_table)
-        node_attrs = to_one_hot(
-            torch.tensor(indices, dtype=torch.long).unsqueeze(-1),
-            num_classes=len(z_table))
-        node_e0 = atomic_energies_fn(node_attrs)
-        graph_e0s = scatter_sum(
-            src=node_e0, index=graph.batch, dim=-1, dim_size=graph.num_graphs
-        )
-        graph_sizes = graph.ptr[1:] - graph.ptr[:-1]
-        # avg_atom_inter_es_list.append(
-        #     (batch['energy'] - graph_e0s) / graph_sizes
-        # )  # {[n_graphs], }
-        avg_num_neighbors_list.append(graph.edge_index.numel()/len(atomic_numbers))
-       
-        mean = to_numpy(torch.mean((batch['energy'] - graph_e0s) / graph_sizes)).item()
-        std = to_numpy(torch.std((batch['energy'] - graph_e0s) / graph_sizes)).item()
-        mean_sum+=mean
-        std_sum+=std
-        print(mean, std)
-    avg_num_neighbors= torch.mean(torch.Tensor(avg_num_neighbors_list))
-    return mean_sum/counter, std_sum/counter, avg_num_neighbors
+        mean, std, avg_num_neighbors = process_batch(batch, atomic_energies_fn)
+        
+        # Update running estimates
+        iterations += 1
+        delta_mean = mean - mean_estimate
+        delta_std = std - std_estimate
+        mean_estimate += delta_mean / iterations
+        std_estimate += delta_std / iterations
+        print(iterations,mean,std,delta_mean,delta_std)
+        means+=[mean_estimate]
+        if iterations > 1 and abs(delta_mean) < convergence_threshold and abs(delta_std) < convergence_threshold:
+            print("Converged")
+            return mean_estimate, std_estimate, avg_num_neighbors
+        
+        if iterations >= max_iterations:
+            print("Max Iterations reached")
+            return mean_estimate, std_estimate, avg_num_neighbors
+    print("Data Exhausted")
+    return mean_estimate, std_estimate, avg_num_neighbors
+
+
 
 # %%
 def main(args):
-    
+    torch.autograd.set_detect_anomaly(True)
+
     # Load Data
     dm = MatSciMLDataModule(
         "MaterialsProjectDataset",
         train_path=TRAIN_PATH,
         val_split=VAL_PATH,
+        test_split=VAL_PATH,
         dset_kwargs={
             "transforms": [
                 PeriodicPropertiesTransform(cutoff_radius=10.0),
@@ -181,10 +200,11 @@ def main(args):
     dataset_iter = iter(train_loader)
     batch = next(dataset_iter)
     
-    
+    atomic_energies=torch.ones(118)*(-5)
     atomic_energies=compute_average_E0s(train_loader,np.arange(1,119))
     atomic_inter_shift,atomic_inter_scale,avg_num_neighbors =compute_mean_std_atomic_inter_energy_and_avg_num_neighbors(train_loader,atomic_energies)
-   
+    # atomic_inter_shift,atomic_inter_scale,avg_num_neighbors = -10, 1, 15
+
     atomic_numbers = torch.arange(1, 119)
 
     # atomic_inter_shift = pre_compute_params["mean"]
@@ -220,11 +240,32 @@ def main(args):
         atomic_inter_shift=atomic_inter_shift,
         training=True,
     )
+    def custom_lr_schedule(warmup_epochs=10, decay_epochs=30, total_epochs=100):
+        def lr_lambda(current_epoch):
+            if current_epoch < warmup_epochs:
+                # Increase the learning rate linearly during the warmup phase
+                return 0.1+current_epoch / warmup_epochs
+            elif current_epoch < warmup_epochs + decay_epochs:
+                # Keep the learning rate constant
+                return 1.0
+            else:
+                # Decrease the learning rate linearly after warmup + decay epochs
+                return 1 - (current_epoch - warmup_epochs - decay_epochs) / (total_epochs - warmup_epochs - decay_epochs)
 
+        
+        # scheduler = LambdaLR(optimizer, lr_lambda)
+        return lr_lambda
     task = MaceEnergyForceTask(
         encoder_class=ScaleShiftMACE,
         encoder_kwargs=model_config,
         task_keys=["energy", "force"],
+        # scheduler_kwargs= {'CosineAnnealingLR':{"T_max":100,"optimizer":optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4},},
+        scheduler_kwargs = {
+            'LambdaLR': {
+            'lr_lambda': custom_lr_schedule,
+            
+            }
+        },
         output_kwargs={
             "energy": {
                 "block_type": "IdentityOutputBlock",
@@ -238,7 +279,7 @@ def main(args):
             },
         },
         loss_coeff={"energy": 1.0, "force": 10.0},
-        lr=0.005,
+        lr=0.00001,
         weight_decay=1e-8,
     )
 
@@ -247,23 +288,30 @@ def main(args):
 
     # Start Training
     # logger = CSVLogger(save_dir="./mace_experiments")
-    wandb.init(project='normalisation', entity='m3rg', mode='online', )
+    wandb.init(project='normalisation', entity='m3rg', mode='online', name="custom_normal_re1")
     logger = WandbLogger(log_model="all", name=f"mace-{DATASET}-data", save_dir='./Trial_Mace')
 
-    mc = ModelCheckpoint(monitor="val_force", save_top_k=5)
-
+    mc = ModelCheckpoint(monitor="val_energy", save_top_k=5)
+    # accumulator = GradientAccumulationScheduler(scheduling={0: 1})
+    
     trainer = pl.Trainer(
         max_epochs=1000,
         min_epochs=20,
         log_every_n_steps=5,
+        precision=16,
         accelerator="gpu",
+        # limit_train_batches=0.8, 
+        # limit_val_batches=0.1, 
+        
         devices=1,
+        gradient_clip_val=0.1,
         # strategy="ddp_find_unused_parameters_true",
         logger=logger,
-        # callbacks=[
-        #     GradientCheckCallback(),
-        #     mc,
-        # ],
+        callbacks=[
+            GradientCheckCallback(),
+            mc,
+            # accumulator,
+        ],
     )
 
     trainer.fit(task, datamodule=dm)
