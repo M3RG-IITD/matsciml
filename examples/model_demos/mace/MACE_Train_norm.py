@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-# sys.path.append("/workspace/ai-mat-top/matsciml_top/forks/carmelo_matsciml/")
+sys.path.append("/workspace/ai-mat-top/matsciml_top/forks/carmelo_matsciml/")
 
 import e3nn
 # import math
@@ -24,7 +24,7 @@ from matsciml.datasets import transforms
 # sys.path.append(
 #     "/workspace/ai-mat-top/matsciml_top/forks/carmelo_matsciml/",
 # )  # Path to matsciml directory(or matsciml installed as package )
-from matsciml.datasets.lips import LiPSDataset, lips_devset
+# from matsciml.datasets.lips import LiPSDataset, lips_devset
 from matsciml.datasets.transforms import (
     PeriodicPropertiesTransform,
     PointCloudToGraphTransform,
@@ -40,7 +40,7 @@ from matsciml.models.pyg.mace.tools import atomic_numbers_to_indices, to_one_hot
 
 pl.seed_everything(6)
 
-torch.manual_seed(111)
+# torch.manual_seed(111)
 # %%
 
 
@@ -81,13 +81,18 @@ import torch.optim as optim
 
 
 
-DATASET = "gnome_mptraj"
+DATASET = "mptraj"
 # TRAIN_PATH = "/store/code/open-catalyst/data_lmdbs/mp-traj-gnome-combo/train"
 # VAL_PATH = "/store/code/open-catalyst/data_lmdbs/mp-traj-gnome-combo/val"
-TRAIN_PATH =  "/home/m3rg2000/matsciml/matsciml/datasets/devset" #"/home/m3rg2000/matsciml/matsciml/datasets/devset" #"matsciml/datasets/lips/devset"#"/datasets-alt/molecular-data/mat_traj/mp-traj-gnome-combo/train"
-VAL_PATH = "/home/m3rg2000/matsciml/matsciml/datasets/trial/test" #"matsciml/datasets/lips/devset"#"/datasesets-alt/molecular-data/mat_traj/mp-traj-gnome-combo/val"
+# TRAIN_PATH =  "/home/m3rg2000/matsciml/matsciml/datasets/devset" #"/home/m3rg2000/matsciml/matsciml/datasets/devset" #"matsciml/datasets/lips/devset"#"/datasets-alt/molecular-data/mat_traj/mp-traj-gnome-combo/train"
+# VAL_PATH = "/home/m3rg2000/matsciml/matsciml/datasets/trial/test" #"matsciml/datasets/lips/devset"#"/datasesets-alt/molecular-data/mat_traj/mp-traj-gnome-combo/val"
 
-def compute_average_E0s(collections_train, z_table,max_iter=50):
+TRAIN_PATH =  "/datasets-alt/molecular-data/mat_traj/mp-traj-full/train"
+VAL_PATH = "/datasets-alt/molecular-data/mat_traj/mp-traj-full/val"
+
+
+
+def compute_average_E0s(collections_train, z_table,max_iter=80):
     """
     Function to compute the average interaction energy of each chemical element
     returns dictionary of E0s
@@ -288,14 +293,14 @@ def main(args):
 
     # Start Training
     # logger = CSVLogger(save_dir="./mace_experiments")
-    wandb.init(project='normalisation', entity='m3rg', mode='online', name="custom_normal_re1")
-    logger = WandbLogger(log_model="all", name=f"mace-{DATASET}-data", save_dir='./Trial_Mace')
+    wandb.init(project='mace-training-normalized', entity='smiret', mode='online', name="custom_normal_iitd_1")
+    logger = WandbLogger(log_model="all", name=f"mace-{DATASET}-data", save_dir='/workspace/nosnap/matsciml/mace_train/')
 
     mc = ModelCheckpoint(monitor="val_energy", save_top_k=5)
     # accumulator = GradientAccumulationScheduler(scheduling={0: 1})
     
     trainer = pl.Trainer(
-        max_epochs=1000,
+        max_epochs=200,
         min_epochs=20,
         log_every_n_steps=5,
         precision=16,
@@ -303,9 +308,9 @@ def main(args):
         # limit_train_batches=0.8, 
         # limit_val_batches=0.1, 
         
-        devices=1,
+        devices=8,
         gradient_clip_val=0.1,
-        # strategy="ddp_find_unused_parameters_true",
+        strategy="ddp_find_unused_parameters_true",
         logger=logger,
         callbacks=[
             GradientCheckCallback(),
@@ -324,7 +329,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_bessel",
         type=int,
-        default=3,
+        default=2,
         help="Bessel embeding size",
     )
     parser.add_argument(
@@ -361,7 +366,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_L",
         type=int,
-        default=2,
+        default=3,
         help="max_L",
     )
 
