@@ -7,16 +7,14 @@ from functools import cache, cached_property
 from importlib.util import find_spec
 from math import pi
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable
 
 import numpy as np
 import torch
 from emmet.core.symmetry import SymmetryData
-from matgl.ext.pymatgen import Structure2Graph
-from matgl.graph.data import M3GNetDataset
 from pymatgen.analysis import local_env
 from pymatgen.analysis.graphs import StructureGraph
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Structure
 from tqdm import tqdm
 
 from matsciml.common.registry import registry
@@ -24,7 +22,6 @@ from matsciml.common.types import BatchDict, DataDict
 from matsciml.datasets.base import PointCloudDataset
 from matsciml.datasets.utils import (
     concatenate_keys,
-    element_types,
     point_cloud_featurization,
 )
 
@@ -247,18 +244,17 @@ class MaterialsProjectDataset(PointCloudDataset):
         self._parse_structure(data, return_dict)
         self._parse_symmetry(data, return_dict)
         # assume every other key are targets
-        not_targets = {
-            "structure",
-            "symmetry",
-            "fields_not_requested",
-            "formula_pretty",
-        }
-        if data.get("fields_not_requested", None) is None:
-            fnr = ["@class", "@module"]
-            not_targets.update(fnr)
-        else:
-            not_targets.update(data["fields_not_requested"])
-        target_keys = getattr(self, "_target_keys", None)
+        not_targets = set(
+            [
+                "structure",
+                "symmetry",
+                "fields_not_requested",
+                "formula_pretty",
+                "magmom",
+            ]
+            + data["fields_not_requested"],
+        )
+        # target_keys = getattr(self, "_target_keys", None)
         target_keys = self.target_key_list
         # in the event we're getting data for the first time
         if not target_keys:
@@ -275,19 +271,17 @@ class MaterialsProjectDataset(PointCloudDataset):
         target_types = {"classification": [], "regression": []}
 
         for key in target_keys:
-            # item = targets.get(key)
-            # if key in ["force", "magmom"]:
-            target_types["regression"].append(key)
-            # if isinstance(item, Iterable):
-            #     # check if the data is numeric first
-            #     if isinstance(item[0], (float, int)):
-            #         target_types["regression"].append(key)
-            # else:
-            #     if isinstance(item, (float, int)):
-            #         target_type = (
-            #             "classification" if isinstance(item, int) else "regression"
-            #         )
-            #         target_types[target_type].append(key)
+            item = targets.get(key)
+            if isinstance(item, Iterable):
+                # check if the data is numeric first
+                if isinstance(item[0], (float, int)) or torch.is_tensor(item):
+                    target_types["regression"].append(key)
+            else:
+                if isinstance(item, (float, int)):
+                    target_type = (
+                        "classification" if isinstance(item, int) else "regression"
+                    )
+                    target_types[target_type].append(key)
         return_dict["target_types"] = target_types
         self.target_keys = target_types
         return return_dict
@@ -353,7 +347,7 @@ class MaterialsProjectDataset(PointCloudDataset):
         # the atom-centered point cloud data
         return concatenate_keys(
             batch,
-            pad_keys=["pc_features"],
+            pad_keys=["pc_features", "force", "stress"],
             unpacked_keys=["sizes", "src_nodes", "dst_nodes"],
         )
 
@@ -684,35 +678,3 @@ if _has_pyg:
                         [(lmdb_index, int(subindex)) for subindex in subindices],
                     )
             return indices
-
-
-@registry.register_dataset("M3GMaterialsProjectDataset")
-class M3GMaterialsProjectDataset(MaterialsProjectDataset):
-    def __init__(
-        self,
-        lmdb_root_path: str | Path,
-        threebody_cutoff: float = 4.0,
-        cutoff_dist: float = 20.0,
-        graph_labels: list[int | float] | None = None,
-        transforms: list[Callable[..., Any]] | None = None,
-    ):
-        super().__init__(lmdb_root_path, transforms)
-        self.threebody_cutoff = threebody_cutoff
-        self.graph_labels = graph_labels
-        self.cutoff_dist = cutoff_dist
-        self.clear_processed = True
-
-    def _parse_structure(
-        self,
-        data: dict[str, Any],
-        return_dict: dict[str, Any],
-    ) -> None:
-        super()._parse_structure(data, return_dict)
-        structure: None | Structure = data.get("structure", None)
-        self.structures = [structure]
-        self.converter = Structure2Graph(
-            element_types=element_types(),
-            cutoff=self.cutoff_dist,
-        )
-        graphs, lattices, lg, sa = M3GNetDataset.process(self)
-        return_dict["graph"] = graphs[0]

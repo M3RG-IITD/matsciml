@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable
 
 import torch
-from lightning_fabric.plugins.collectives.torch_collective import default_pg_timeout
+import pytorch_lightning as pl
 from pytorch_lightning.plugins import CheckpointIO
 from pytorch_lightning.plugins.environments import LightningEnvironment
-from pytorch_lightning.plugins.precision import PrecisionPlugin
+from pytorch_lightning.plugins.precision import Precision
 from pytorch_lightning.strategies import StrategyRegistry
 from pytorch_lightning.strategies.ddp import DDPStrategy
 
-# majority of these imports are just for type hinting!
+__all__ = ["MPIEnvironment", "MPIDDPStrategy"]
+
+default_pg_timeout = timedelta(seconds=1800)
 
 
 class MPIEnvironment(LightningEnvironment):
@@ -66,7 +68,7 @@ class MPIDDPStrategy(DDPStrategy):
         accelerator: pl.accelerators.Accelerator | None = None,
         parallel_devices: list[torch.device] | None = None,
         checkpoint_io: CheckpointIO | None = None,
-        precision_plugin: PrecisionPlugin | None = None,
+        precision_plugin: Precision | None = None,
         ddp_comm_state: object | None = None,
         ddp_comm_hook: Callable | None = None,
         ddp_comm_wrapper: Callable | None = None,
