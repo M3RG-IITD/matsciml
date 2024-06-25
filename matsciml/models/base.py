@@ -8,7 +8,6 @@ from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Dict, List, Optional, Type, Union
 from warnings import warn
-from logging import getLogger
 
 import pytorch_lightning as pl
 import torch
@@ -22,9 +21,6 @@ from matsciml.common.registry import registry
 from matsciml.common.types import AbstractGraph, BatchDict, DataDict, Embeddings
 from matsciml.models.common import OutputHead
 from matsciml.modules.normalizer import Normalizer
-
-logger = getLogger("matsciml")
-logger.setLevel("INFO")
 
 if package_registry["dgl"]:
     import dgl
@@ -42,7 +38,6 @@ __all__ = [
     "OpenCatalystInference",
     "IS2REInference",
     "S2EFInference",
-    "BaseTaskModule",
 ]
 
 """
@@ -707,7 +702,7 @@ class BaseTaskModule(pl.LightningModule):
             if kwargs["task_loss_scaling"] is not None:
                 self.task_loss_scaling = kwargs["task_loss_scaling"]
         else:
-            self.task_loss_scaling = None
+            self.task_loss_scaling = dict(zip(task_keys, [1] * len(task_keys)))
         self.embedding_reduction_type = embedding_reduction_type
         self.save_hyperparameters(ignore=["encoder", "loss_func"])
         accuracy_func = kwargs.get("accuracy_func", None)
@@ -1016,8 +1011,7 @@ class BaseTaskModule(pl.LightningModule):
                 f1s[f"{key}_10"] = self.f1_10(preds, target_val)
 
             loss = self.loss_func(predictions[key], target_val)
-            if self.task_loss_scaling is not None:
-                loss = loss * self.task_loss_scaling[key]
+            loss = loss * self.task_loss_scaling[key]
             losses[key] = loss
 
         total_loss: torch.Tensor = sum(losses.values())
@@ -1149,38 +1143,6 @@ class BaseTaskModule(pl.LightningModule):
             normalizers[key] = Normalizer(mean=mean, std=std, device=self.device)
         return normalizers
 
-    def predict(self, batch: BatchDict) -> dict[str, torch.Tensor]:
-        """
-        Implements what is effectively the 'inference' logic of the task,
-        where run the forward pass on a batch of samples, and if normalizers
-        were used for training, we also apply the inverse operation to get
-        values in the right scale.
-
-        Not to be confused with `predict_step`, which is used by Lightning as
-        part of the prediction workflow. Since there is no one-size-fits-all
-        inference workflow we can define, this provides a convenient function
-        for users to call as a replacement.
-
-        Parameters
-        ----------
-        batch : BatchDict
-            Batch of samples to pass to the model.
-
-        Returns
-        -------
-        dict[str, torch.Tensor]
-            Output dictionary as provided by the forward pass, but if
-            normalizers are available for a given task, we apply the
-            inverse norm on the value.
-        """
-        outputs = self(batch)
-        if self.uses_normalizers:
-            for key in self.task_keys:
-                if key in self.normalizers:
-                    # apply the inverse transform if provided
-                    outputs[key] = self.normalizers[key].denorm(outputs[key])
-        return outputs
-
     @classmethod
     def from_pretrained_encoder(cls, task_ckpt_path: str | Path, **kwargs):
         """
@@ -1275,9 +1237,7 @@ class ScalarRegressionTask(BaseTaskModule):
     def _make_output_heads(self) -> nn.ModuleDict:
         modules = {}
         for key in self.task_keys:
-            modules[key] = OutputHead(1, **self.output_kwargs).to(
-                self.device, dtype=self.dtype
-            )
+            modules[key] = OutputHead(1, **self.output_kwargs).to(self.device)
         return nn.ModuleDict(modules)
 
     def _filter_task_keys(
@@ -1457,9 +1417,7 @@ class MaceEnergyForceTask(BaseTaskModule):
     def _make_output_heads(self) -> nn.ModuleDict:
         modules = {}
         for key in self.task_keys:
-            modules[key] = OutputHead(**self.output_kwargs[key]).to(
-                self.device, dtype=self.dtype
-            )
+            modules[key] = OutputHead(**self.output_kwargs[key]).to(self.device)
         return nn.ModuleDict(modules)
 
     def _filter_task_keys(
@@ -1616,9 +1574,7 @@ class BinaryClassificationTask(BaseTaskModule):
     def _make_output_heads(self) -> nn.ModuleDict:
         modules = {}
         for key in self.task_keys:
-            modules[key] = OutputHead(1, **self.output_kwargs).to(
-                self.device, dtype=self.dtype
-            )
+            modules[key] = OutputHead(1, **self.output_kwargs).to(self.device)
         return nn.ModuleDict(modules)
 
     def on_train_batch_start(self, batch: Any, batch_idx: int) -> int | None:
@@ -1693,11 +1649,7 @@ class ForceRegressionTask(BaseTaskModule):
 
     def _make_output_heads(self) -> nn.ModuleDict:
         # this task only utilizes one output head
-        modules = {
-            "energy": OutputHead(1, **self.output_kwargs).to(
-                self.device, dtype=self.dtype
-            )
-        }
+        modules = {"energy": OutputHead(1, **self.output_kwargs).to(self.device)}
         return nn.ModuleDict(modules)
 
     def forward(
@@ -1705,22 +1657,28 @@ class ForceRegressionTask(BaseTaskModule):
         batch: dict[str, torch.Tensor | dgl.DGLGraph | dict[str, torch.Tensor]],
     ) -> dict[str, torch.Tensor]:
         # for ease of use, this task will always compute forces
+        del batch['embeddings']
         with dynamic_gradients_context(True, self.has_rnn):
             # first ensure that positions tensor is backprop ready
             if "graph" in batch:
                 graph = batch["graph"]
+                cell = batch["cell"]
                 # the DGL case
                 if hasattr(graph, "ndata"):
                     pos: torch.Tensor = graph.ndata.get("pos")
+                    
                     # for frame averaging
                     fa_rot = graph.ndata.get("fa_rot", None)
                     fa_pos = graph.ndata.get("fa_pos", None)
+                    graph.ndata['pos'] = pos
                 else:
                     # otherwise assume it's PyG
                     pos: torch.Tensor = graph.pos
+                    
                     # for frame averaging
                     fa_rot = getattr(graph, "fa_rot", None)
                     fa_pos = getattr(graph, "fa_pos", None)
+                    cell = getattr(graph,"cell",None)
             else:
                 graph = None
                 # assume point cloud otherwise
@@ -1734,6 +1692,35 @@ class ForceRegressionTask(BaseTaskModule):
                 )
             if isinstance(pos, torch.Tensor):
                 pos.requires_grad_(True)
+                displacement = torch.zeros(
+                            (1, 3, 3),
+                            dtype=pos.dtype,
+                            device=pos.device,
+                            )   
+
+                displacement.requires_grad_(True)
+                symmetric_displacement = 0.5 * (
+                    displacement + displacement.transpose(-1, -2)
+                )  # From https://github.com/mir-group/nequip
+                pos=pos+torch.einsum(
+                    "be,bec->bc",
+                    pos,
+                    symmetric_displacement,
+                )
+                if "graph" in batch:
+                    graph.pos=pos
+                if hasattr(graph, "ndata"):
+                    graph.ndata['pos'] = pos
+               
+                if(fa_pos is not None):
+                    for k in range(len(fa_pos)):
+                        fa_pos[0].requires_grad_(True)
+                        fa_pos[0]=fa_pos[0]+torch.einsum(
+                            "be,bec->bc",
+                            pos,
+                            symmetric_displacement,
+                            )
+
             elif isinstance(pos, list):
                 [p.requires_grad_(True) for p in pos]
             else:
@@ -1748,9 +1735,10 @@ class ForceRegressionTask(BaseTaskModule):
                 embeddings = batch.get("embeddings")
             else:
                 embeddings = self.encoder(batch)
+                
             natoms = batch.get("natoms", None)
             outputs = self.process_embedding(
-                embeddings, pos, fa_rot, fa_pos, natoms, graph
+                embeddings, pos,displacement,cell, fa_rot, fa_pos, natoms, graph
             )
         return outputs
 
@@ -1758,12 +1746,15 @@ class ForceRegressionTask(BaseTaskModule):
         self,
         embeddings: Embeddings,
         pos: torch.Tensor,
+        displacement: torch.Tensor,
+        cell :torch.Tensor,
         fa_rot: None | torch.Tensor = None,
         fa_pos: None | torch.Tensor = None,
         natoms: None | torch.Tensor = None,
         graph: None | AbstractGraph = None,
     ) -> dict[str, torch.Tensor]:
         outputs = {}
+        
         # compute node-level contributions to the energy
         node_energies = self.output_heads["energy"](embeddings.point_embedding)
         # figure out how we're going to reduce node level energies
@@ -1778,9 +1769,7 @@ class ForceRegressionTask(BaseTaskModule):
                     )
             else:
                 # assumes a batched pyg graph
-                batch = getattr(graph, "batch", None)
-                if batch is None:
-                    batch = torch.zeros_like(graph.atomic_numbers)
+                batch = graph.batch
                 from torch_geometric.utils import scatter
 
                 def readout(node_energies: torch.Tensor):
@@ -1798,37 +1787,61 @@ class ForceRegressionTask(BaseTaskModule):
                 )
 
         def energy_and_force(
-            pos: torch.Tensor, node_energies: torch.Tensor, readout: Callable
+            pos: torch.Tensor,displacement: torch.Tensor,cell: torch.Tensor, node_energies: torch.Tensor, readout: Callable
         ) -> tuple[torch.Tensor, torch.Tensor]:
             # we sum over points and keep dimension as 1
             energy = readout(node_energies)
             if energy.ndim == 1:
                 energy.unsqueeze(-1)
             # now use autograd for force calculation
-            force = (
-                -1
-                * torch.autograd.grad(
-                    energy,
-                    pos,
-                    grad_outputs=torch.ones_like(energy),
-                    create_graph=True,
-                )[0]
+            
+            # force = (
+            #     -1
+            #     * torch.autograd.grad(
+            #         energy,
+            #         pos,
+            #         grad_outputs=torch.ones_like(energy),
+            #         create_graph=True,
+            #     )[0]
+            # )
+            
+           
+
+            forces, virials = torch.autograd.grad(
+                outputs=[energy],  # [n_graphs, ]
+                inputs=[pos, displacement],  # [n_nodes, 3]
+                retain_graph=True,  # Make sure the graph is not destroyed during training
+                create_graph=True,  # Create graph for second derivative
+                allow_unused=True,
             )
-            return energy, force
+            
+            cell = cell.view(-1, 3, 3)
+            volume = torch.einsum(
+                "zi,zi->z",
+                cell[:, 0, :],
+                torch.cross(cell[:, 1, :], cell[:, 2, :], dim=1),
+            ).unsqueeze(-1)
+            stress = virials / volume.view(-1, 1, 1)
+
+
+
+            return energy, -1*forces , stress
 
         # not using frame averaging
         if fa_pos is None:
-            energy, force = energy_and_force(pos, node_energies, readout)
+            energy, force, stress = energy_and_force(pos,displacement,cell, node_energies, readout)
         else:
             energy = []
             force = []
+            stress=[]
             for idx, pos in enumerate(fa_pos):
                 frame_embedding = node_energies[:, idx, :]
-                frame_energy, frame_force = energy_and_force(
-                    pos, frame_embedding, readout
+                frame_energy, frame_force, frame_stress = energy_and_force(
+                    pos,displacement,cell, frame_embedding, readout
                 )
                 force.append(frame_force)
                 energy.append(frame_energy.unsqueeze(-1))
+                stress.append(frame_stress)
 
         # check to see if we are frame averaging
         if fa_rot is not None:
@@ -1852,6 +1865,7 @@ class ForceRegressionTask(BaseTaskModule):
             # energy - [batch size, num frames, 1]
             force = torch.cat(all_forces, dim=1)
             energy = torch.cat(energy, dim=1)
+            stress= torch.cat(stress,dim=1)
         # reduce outputs to what are expected shapes
         outputs["force"] = reduce(
             force,
@@ -1867,41 +1881,12 @@ class ForceRegressionTask(BaseTaskModule):
             self.embedding_reduction_type,
             d=1,
         )
+       
         # this ensures that we get a scalar value for every node
         # representing the energy contribution
         outputs["node_energies"] = node_energies
+        outputs["stress"]=stress
         return outputs
-
-    def predict(self, batch: BatchDict) -> dict[str, torch.Tensor]:
-        """
-        Similar to the base method, but we make two minor modifications to
-        the denormalization logic as we want to potentially apply the same
-        energy normalization rescaling to the forces and node-level energies.
-
-        Parameters
-        ----------
-        batch : BatchDict
-            Batch of samples to evaluate on.
-
-        Returns
-        -------
-        dict[str, torch.Tensor]
-            Output dictionary as provided by the forward call. For this task in
-            particular, we may also apply the energy rescaling to forces and
-            node energies if separate keys for them are not provided.
-        """
-        output = super().predict(batch)
-        # for forces, in the event that a dedicated normalizer wasn't provided
-        # but we have an energy normalizer, we apply the same factors to the force
-        if self.uses_normalizers:
-            if "force" not in self.normalizers and "energy" in self.normalizers:
-                # for force only std is used to rescale
-                output["force"] = output["force"] * self.normalizers["energy"].std
-            if "node_energies" not in self.normalizers and "energy" in self.normalizers:
-                output["node_energies"] = self.normalizers["energy"].denorm(
-                    output["node_energies"]
-                )
-        return output
 
     def _get_targets(
         self,
@@ -2024,36 +2009,6 @@ class ForceRegressionTask(BaseTaskModule):
         self.log_dict(metrics, on_step=True, prog_bar=True, batch_size=batch_size)
         return loss_dict
 
-    def _make_normalizers(self) -> dict[str, Normalizer]:
-        """
-        Applies force specific logic, where we check for the case
-        when an energy normalizer is provided by not force. To make
-        sure things are consistent, this will automatically add the
-        force normalizer with zero mean, and copies the std value from
-        the energy normalizer.
-
-        Returns
-        -------
-        Dict[str, Normalizer]
-            Normalizers for each target
-        """
-        normalizers = super()._make_normalizers()
-        if "energy" in normalizers and "force" not in normalizers:
-            energy_std = normalizers["energy"].std
-            if isinstance(energy_std, torch.Tensor):
-                std = energy_std.clone()
-                mean = torch.zeros_like(std)
-            else:
-                # assume it's a float otherwise
-                std = energy_std
-                mean = 0.0
-            force_norm = Normalizer(mean=mean, std=std, device=self.device)
-            normalizers["force"] = force_norm
-            logger.warning(
-                "Energy normalization was specified, but not force. I'm adding it for you."
-            )
-        return normalizers
-
 
 @registry.register_task("GradFreeForceRegressionTask")
 class GradFreeForceRegressionTask(ScalarRegressionTask):
@@ -2085,11 +2040,7 @@ class GradFreeForceRegressionTask(ScalarRegressionTask):
         )
 
     def _make_output_heads(self) -> nn.ModuleDict:
-        modules = {
-            "force": OutputHead(3, **self.output_kwargs).to(
-                self.device, dtype=self.dtype
-            )
-        }
+        modules = {"force": OutputHead(3, **self.output_kwargs).to(self.device)}
         return nn.ModuleDict(modules)
 
     def _get_targets(
@@ -2225,11 +2176,7 @@ class CrystalSymmetryClassificationTask(BaseTaskModule):
 
     def _make_output_heads(self) -> nn.ModuleDict:
         # this task only utilizes one output head; 230 possible space groups
-        modules = {
-            "spacegroup": OutputHead(230, **self.output_kwargs).to(
-                self.device, dtype=self.dtype
-            )
-        }
+        modules = {"spacegroup": OutputHead(230, **self.output_kwargs).to(self.device)}
         return nn.ModuleDict(modules)
 
     def on_train_batch_start(self, batch: Any, batch_idx: int) -> int | None:
@@ -2592,9 +2539,7 @@ class MultiTaskLitModule(pl.LightningModule):
         """
         need_grad_keys = getattr(self, "input_grad_keys", None)
         if need_grad_keys is not None:
-            # we determine if it's multidata based on the incoming batch
-            # as it should have dataset in its key
-            if any(["Dataset" in key for key in batch.keys()]):
+            if self.is_multidata:
                 # if this is a multidataset task, loop over each dataset
                 # and enable gradients for the inputs that need them
                 for dset_name, data in batch.items():
@@ -2602,7 +2547,7 @@ class MultiTaskLitModule(pl.LightningModule):
                     for key in input_keys:
                         # set require grad for both point cloud and graph tensors
                         if "graph" in data:
-                            g = data.get("graph")
+                            g = data.get("g")
                             if isinstance(g, dgl.DGLGraph):
                                 if key in g.ndata:
                                     data["graph"].ndata[key].requires_grad_(True)
@@ -2627,17 +2572,17 @@ class MultiTaskLitModule(pl.LightningModule):
                 input_keys = list(self.input_grad_keys.values()).pop(0)
                 for key in input_keys:
                     # set require grad for both point cloud and graph tensors
-                    if "graph" in batch:
-                        g = batch.get("graph")
+                    if "graph" in data:
+                        g = data.get("g")
                         if isinstance(g, dgl.DGLGraph):
                             if key in g.ndata:
-                                batch["graph"].ndata[key].requires_grad_(True)
+                                data["graph"].ndata[key].requires_grad_(True)
                         else:
                             # assume it's a PyG graph
                             if key in g:
                                 getattr(g, key).requires_grad_(True)
-                    if key in batch:
-                        target = batch.get(key)
+                    if key in data:
+                        target = data.get(key)
                         # for tensors just set them directly
                         if isinstance(target, torch.Tensor):
                             target.requires_grad_(True)
@@ -2705,52 +2650,6 @@ class MultiTaskLitModule(pl.LightningModule):
                 for task_type, subtask in tasks.items():
                     results[task_type] = subtask(batch)
             return results
-
-    def predict(self, batch: BatchDict) -> dict[str, dict[str, torch.Tensor]]:
-        """
-        Similar logic to the `BaseTaskModule.predict` method, but implemented
-        for the multitask setting.
-
-        The workflow is a linear combination of the two: we run the joint
-        embedder once, and then subsequently rely on the `predict` method
-        for each subtask to get outputs at their expected scales.
-
-        This method also behaves a little differently from the other multitask
-        operations, as it runs a set of data through every single output head,
-        ignoring the nominal dataset/subtask unique mapping.
-
-        Parameters
-        ----------
-        batch
-            Input data dictionary, which should correspond to a formatted
-            ase.Atoms sample.
-
-        Returns
-        -------
-        dict[str, dict[str, torch.Tensor]]
-            Nested results dictionary, following a dataset/subtask structure.
-            For example, {'IS2REDataset': {'ForceRegressionTask': ..., 'ScalarRegressionTask': ...}}
-        """
-        results = {}
-        _grads = getattr(
-            self,
-            "needs_dynamic_grads",
-            False,
-        )  # default to not needing grads
-        with dynamic_gradients_context(_grads, self.has_rnn):
-            # this function switches of `requires_grad_` for input tensors that need them
-            self._toggle_input_grads(batch)
-            batch["embedding"] = self.encoder(batch)
-            # now loop through every dataset/output head pair
-            for dset_name, subtask_name in self.dataset_task_pairs:
-                subtask = self.task_map[dset_name][subtask_name]
-                # use the predict method to get rescaled outputs
-                output = subtask.predict(batch)
-                # now add it to the rest of the results
-                if dset_name not in results:
-                    results[dset_name] = {}
-                results[dset_name][subtask_name] = output
-        return results
 
     def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
         """
@@ -3338,7 +3237,7 @@ class NodeDenoisingTask(BaseTaskModule):
 
     def _make_output_heads(self) -> nn.ModuleDict:
         # make a single output head for noise prediction applied to nodes
-        denoise = OutputHead(3, **self.output_kwargs).to(self.device, dtype=self.dtype)
+        denoise = OutputHead(3, **self.output_kwargs).to(self.device)
         return nn.ModuleDict({"denoise": denoise})
 
     def _filter_task_keys(

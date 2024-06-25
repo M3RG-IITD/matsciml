@@ -27,7 +27,7 @@ from dgl.data.dgl_dataset import DGLDataset
 from dgl.nn.pytorch.factory import KNNGraph
 from torch.utils.data import Dataset
 
-# from torch_geometric.data import Batch
+from torch_geometric.data import Batch
 # from matsciml.common.utils import pyg2_data_transform
 
 

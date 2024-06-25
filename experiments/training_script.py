@@ -86,7 +86,7 @@ if __name__ == "__main__":
         args.run_type = "experiment"
 
     log_path = os.path.join(
-        "/workspace/nosnap/matsciml/full-runs/",
+        "./",# "/workspace/nosnap/matsciml/full-runs/",
         args.run_type,
         args.model,
         "-".join(args.data),
